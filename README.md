@@ -11,8 +11,8 @@ The complete enviroment for building the code:
 - cuda = 11.0
 
 ## Build
-Before building the source code or activate ant virtual enviroment be sure that the path
-point to the right version of the installed cuda
+Before building the source code or activate any virtual enviroment be sure that the path
+points to the right version of the installed cuda
 ```
 export PATH=/home/streetakos/.local/bin:/usr/local/cuda-11.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/usr/local/cuda-11.0/bin:/home/streetakos/bin:/home/streetakos/bin:/home/streetakos/bin
 ```
