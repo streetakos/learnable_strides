@@ -55,29 +55,37 @@ class TestStrideConv:
 
 		
         model = StrideConv2d(in_channels=c_in, out_channels=c_out, kernel_size=2, padding=0)
-		
-        model.weight.data = torch.nn.Parameter(
-            torch.Tensor(deform_weight).reshape(1, 1, 2, 2))
-        #model.stride.data = torch.nn.Parameter(	torch.ones(2) - 0.5 )
+        model.weight.data = torch.nn.Parameter(torch.Tensor(deform_weight).reshape(1, 1, 2, 2))
+        # Strides initialized wih ones		
+        model.stride.data = model.stride.data + 0.0
 		
         if device == 'cuda':
             model.cuda()
         model.type(dtype)
         
         out = model(x) 
-        print(out)		
         out.backward(torch.ones_like(out))
-        '''		
-        model_2 = torch.nn.Conv2d(in_channels=c_in, out_channels=c_out, kernel_size=2, padding=0, stride=2,bias=False)
+        		
+        # Define a standard convolutional model
+        # All operations must yield the same results as the StrideConv with integer strides
+        x_2 = torch.tensor(repeated_input, device=device, dtype=dtype)
+        x_2.requires_grad = True	
+        model_2 = torch.nn.Conv2d(in_channels=c_in, out_channels=c_out, kernel_size=2, padding=0, stride=1,bias=False)
         model_2.weight.data = torch.nn.Parameter(torch.Tensor(deform_weight).reshape(1, 1, 2, 2))
         if device == 'cuda':
             model_2.cuda()
         model_2.type(dtype)
-        
-        out_2 = model_2(x) 
-        print(out_2)		
-        '''				
+        out_2 = model_2(x_2) 
+        out_2.backward(torch.ones_like(out_2))		
 		
+        # Check if the gradients and the output are all close		
+        assert np.allclose(model_2.weight.grad.detach().cpu().numpy()
+						  ,model.weight.grad.detach().cpu().numpy(), threshold)
+        assert np.allclose(out.data.detach().cpu().numpy(),
+						   out_2.data.detach().cpu().numpy(),threshold)
+        assert np.allclose(x_2.grad.detach().cpu().numpy()
+						  ,x.grad.detach().cpu().numpy(), threshold)
+        		
         '''		
         out.backward(torch.ones_like(out))
 
