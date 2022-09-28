@@ -133,11 +133,16 @@ class StrideConv2dFunction(Function):
         ctx.groups = groups
         ctx.im2col_step = im2col_step
 
-		
+        # Asert on strides <1 works		
+        #stride = stride*0.0 +0.5 #torch.nn.Parameter(	torch.ones(2) - 0.5 )
+        #stride = stride + 1.0 #torch.nn.Parameter(	torch.ones(2) - 0.5 )		
+        		
         input = input.type_as(stride)
         weight = weight.type_as(input)
         ctx.save_for_backward(input, weight, stride)
         
+        		
+		
         # Compute the Output shape
         int_strides = ( int(torch.floor(stride)[0]),int(torch.floor(stride)[1]) )
         output = input.new_empty(
@@ -148,8 +153,6 @@ class StrideConv2dFunction(Function):
         cur_im2col_step = min(ctx.im2col_step, input.size(0))
         assert (input.size(0) % cur_im2col_step) == 0, 'im2col step must divide batchsize'
         
-        # Asert on strides <1 works		
-        #stride = stride*0.0 +0.5 #torch.nn.Parameter(	torch.ones(2) - 0.5 )		
         stride_conv_cuda.stride_conv_forward(
             input,
             weight,
@@ -209,30 +212,28 @@ class StrideConv2dFunction(Function):
                 ctx.dilation[0],
                 ctx.groups,
                 cur_im2col_step)
-            print("Grad after call ",grad_stride)			
-        '''
+            print("Grad after call ",grad_stride)
+            #print("Grad after call ",grad_input)			
+        
         if ctx.needs_input_grad[2]:
             grad_weight = torch.zeros_like(weight)
-            ext_module.deform_conv_backward_parameters(
+            stride_conv_cuda.stride_conv_backward_parameters(
                 input,
-                offset,
+                strides,
                 grad_output,
                 grad_weight,
                 ctx.bufs_[0],
                 ctx.bufs_[1],
-                kW=weight.size(3),
-                kH=weight.size(2),
-                dW=ctx.stride[1],
-                dH=ctx.stride[0],
-                padW=ctx.padding[1],
-                padH=ctx.padding[0],
-                dilationW=ctx.dilation[1],
-                dilationH=ctx.dilation[0],
-                group=ctx.groups,
-                deformable_group=ctx.deform_groups,
-                scale=1,
-                im2col_step=cur_im2col_step)
-        '''
+                weight.size(3),
+                weight.size(2),
+                ctx.padding[1],
+                ctx.padding[0],
+                ctx.dilation[1],
+                ctx.dilation[0],
+                ctx.groups,
+                1,
+                cur_im2col_step)
+        print(grad_weight)   
         return grad_input,  grad_weight, grad_stride, \
             None, None, None, None, None, None, None
 
