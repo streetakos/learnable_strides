@@ -352,9 +352,9 @@ __global__ void stride_col2im_coord_gpu_kernel(
     const int offset_c = c - deformable_group_index * 2 * kernel_h * kernel_w;
 
     for (int col_c = (offset_c / 2); col_c < channel_per_deformable_group; col_c += col_step) {
-      
 	  const int col_pos = (((col_c * batch_size + b) * height_col) + h) * width_col + w;
       const int bp_dir = offset_c % 2;
+      //printf("w=%3d, h=%3d, c=%3d, b=%3d col_pos=%3d \n",w,h,c,b,col_pos);
 
       int j = (col_pos / width_col / height_col / batch_size) % kernel_w;
       int i = (col_pos / width_col / height_col / batch_size / kernel_w) % kernel_h;
@@ -362,8 +362,10 @@ __global__ void stride_col2im_coord_gpu_kernel(
       int h_out = (col_pos / width_col) % height_col;
       
 	  int w_in = w_out * stride_w - pad_w;
-      int h_in = h_out * stride_h - pad_h;
+      int h_in = h_out * stride_h - pad_h; 
       
+      
+      printf("i=%3d, j=%3d, c=%3d, b=%3d col_pos=%3d w_out=%3d h_out=%3d \n",i,j,c,b,col_pos, w_out, h_out);		
 	  //const int data_offset_h_ptr = (((2 * (i * kernel_w + j)) * height_col + h_out) * width_col + w_out);
       //const int data_offset_w_ptr = (((2 * (i * kernel_w + j) + 1) * height_col + h_out) * width_col +  w_out);
       //const T offset_h = data_offset_ptr[data_offset_h_ptr];
@@ -376,6 +378,7 @@ __global__ void stride_col2im_coord_gpu_kernel(
         inv_h = inv_w = -2;
       const T weight = get_coordinate_weight(inv_h, inv_w, height, width, data_im_ptr + cnt * height * width, width, bp_dir);
       val += weight * data_col_ptr[col_pos];
+	  
       cnt += 1;
     }
 
