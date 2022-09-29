@@ -4,7 +4,7 @@ import torch
 
 #from mmcv.utils import TORCH_VERSION, digit_version
 
-input = [[[[1., 2., 3.], [0., 1., 2.], [3., 5., 2.]]]]
+input = [[[[10., 2., 3.], [0., 1., 2.], [30., 5., 2.]]]]
 offset_weight = [[[0.1, 0.4, 0.6, 0.1]], [[0.3, 0.2, 0.1, 0.3]],
                  [[0.5, 0.5, 0.2, 0.8]], [[0.8, 0.3, 0.9, 0.1]],
                  [[0.3, 0.1, 0.2, 0.5]], [[0.3, 0.7, 0.5, 0.3]],
@@ -44,40 +44,52 @@ class TestStrideConv:
             pytest.skip('test requires GPU')
 			
         from src.strides import StrideConv2d
+		
+        # Hyperparameters
         c_in = 1
         c_out = 1
-        batch_size = 10
+        batch_size = 1
+        ks = 2	# Not to be changed
+        pad = 0		
+        stride = 1
+		
+        # define input		
         repeated_input = np.repeat(input, batch_size, axis=0)
-        repeated_gt_out = np.repeat(gt_out, batch_size, axis=0)
-        repeated_gt_x_grad = np.repeat(gt_x_grad, batch_size, axis=0)
+        repeated_input = np.repeat(input, c_in, axis=1)
         x = torch.tensor(repeated_input, device=device, dtype=dtype)
         x.requires_grad = True
 
-		
-        model = StrideConv2d(in_channels=c_in, out_channels=c_out, kernel_size=2, padding=0)
-        model.weight.data = torch.nn.Parameter(torch.Tensor(deform_weight).reshape(1, 1, 2, 2))
+        #Define weights
+        deform_weight = [[[0.4, 0.2, 0.1, 0.9]]]		
+        deform_weight = np.reshape(deform_weight,[1,1,ks,ks])
+        deform_weight = np.repeat(deform_weight, c_in, axis=0)
+        deform_weight = np.repeat(deform_weight, c_out, axis=1)
+        w_ = torch.nn.Parameter(torch.Tensor(deform_weight).reshape(c_out, c_in, ks, ks))		
+
+        # Define strided conv		
+        model = StrideConv2d(in_channels=c_in, out_channels=c_out, kernel_size=2, padding=pad)
+        model.weight.data = w_#torch.nn.Parameter(torch.Tensor(deform_weight).reshape(1, 1, 2, 2))
         # Strides initialized wih ones		
-        model.stride.data = model.stride.data + 0.0
-		
+        model.stride.data = model.stride.data + (stride-1.0)	
         if device == 'cuda':
             model.cuda()
         model.type(dtype)
-        
         out = model(x) 
-        out.backward(torch.ones_like(out))
-        		
+        out.backward(torch.ones_like(out))		
+		
         # Define a standard convolutional model
         # All operations must yield the same results as the StrideConv with integer strides
         x_2 = torch.tensor(repeated_input, device=device, dtype=dtype)
         x_2.requires_grad = True	
-        model_2 = torch.nn.Conv2d(in_channels=c_in, out_channels=c_out, kernel_size=2, padding=0, stride=1,bias=False)
-        model_2.weight.data = torch.nn.Parameter(torch.Tensor(deform_weight).reshape(1, 1, 2, 2))
+        model_2 = torch.nn.Conv2d(in_channels=c_in, out_channels=c_out, kernel_size=2, padding=pad, stride=stride, bias=False)
+        model_2.weight.data = w_#torch.nn.Parameter(torch.Tensor(deform_weight).reshape(1, 1, 2, 2))
         if device == 'cuda':
             model_2.cuda()
         model_2.type(dtype)
         out_2 = model_2(x_2) 
-        out_2.backward(torch.ones_like(out_2))		
-		
+        out_2.backward(torch.ones_like(out_2))			
+
+	
         # Check if the gradients and the output are all close		
         assert np.allclose(model_2.weight.grad.detach().cpu().numpy()
 						  ,model.weight.grad.detach().cpu().numpy(), threshold)
@@ -86,57 +98,9 @@ class TestStrideConv:
         assert np.allclose(x_2.grad.detach().cpu().numpy()
 						  ,x.grad.detach().cpu().numpy(), threshold)
         		
-        '''		
-        out.backward(torch.ones_like(out))
-
-        assert np.allclose(out.data.detach().cpu().numpy(), repeated_gt_out,
-                           threshold)
-        assert np.allclose(x.grad.detach().cpu().numpy(), repeated_gt_x_grad,
-                           threshold)
-        # the batch size of the input is increased which results in
-        # a larger gradient so we need to divide by the batch_size
-        assert np.allclose(
-            model.conv_offset.weight.grad.detach().cpu().numpy() / batch_size,
-            gt_offset_weight_grad, threshold)
-        assert np.allclose(
-            model.conv_offset.bias.grad.detach().cpu().numpy() / batch_size,
-            gt_offset_bias_grad, threshold)
-        assert np.allclose(
-            model.weight.grad.detach().cpu().numpy() / batch_size,
-            gt_deform_weight_grad, threshold)
-        
-        from deform_conv import DeformConv2d
-
-        # test bias
-        model = DeformConv2d(1, 1, 2, stride=1, padding=0)
-        assert not hasattr(model, 'bias')
-        # test bias=True
-        with pytest.raises(AssertionError):
-            model = DeformConv2d(1, 1, 2, stride=1, padding=0, bias=True)
-        # test in_channels % group != 0
-        with pytest.raises(AssertionError):
-            model = DeformConv2d(3, 2, 3, groups=2)
-        # test out_channels % group != 0
-        with pytest.raises(AssertionError):
-            model = DeformConv2d(3, 4, 3, groups=3)
-        '''        
-    '''
-    def test_deformconv(self):
-        self._test_deformconv(torch.double, device='cpu')
-        self._test_deformconv(torch.float, device='cpu', threshold=1e-1)
-        self._test_deformconv(torch.double)
-        self._test_deformconv(torch.float)
-        self._test_deformconv(torch.half, threshold=1e-1)
-        # test batch_size < im2col_step
-        self._test_deformconv(torch.float, batch_size=1, im2col_step=2)
-        # test bach_size % im2col_step != 0
-        with pytest.raises(
-                AssertionError,
-                match='batch size must be divisible by im2col_step'):
-            self._test_deformconv(torch.float, batch_size=10, im2col_step=3)
-    '''
-
 				
 td = TestStrideConv()
 td._test_strideconv()
+
+
 
