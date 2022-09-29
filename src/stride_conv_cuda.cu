@@ -16,10 +16,8 @@ void stride_im2col(Tensor data_im, Tensor strides, const int channels,
   int stride_h = strides[0].item<int>();	
   int stride_w = strides[1].item<int>();	
 	
-  int height_col =
-      (height + 2 * pad_h - (dilation_h * (ksize_h - 1) + 1)) / stride_h + 1;
-  int width_col =
-      (width + 2 * pad_w - (dilation_w * (ksize_w - 1) + 1)) / stride_w + 1;
+  int height_col = (height + 2 * pad_h - (dilation_h * (ksize_h - 1) + 1)) / stride_h + 1;
+  int width_col = (width + 2 * pad_w - (dilation_w * (ksize_w - 1) + 1)) / stride_w + 1;
 	
   int num_kernels = channels * height_col * width_col * parallel_imgs;
   
@@ -80,7 +78,7 @@ void stride_col2im_coord(
     Tensor grad_strides) {
 	
 	
-	
+  // parallel_imgs = im2col_step	
   //grad_strides.view({batchSize / im2col_step, im2col_step, 2 * kH * kW, outputHeight, outputWidth}	
   int deformable_group = 1;
 					
@@ -99,16 +97,6 @@ void stride_col2im_coord(
         const scalar_t *data_im_ = data_im.data_ptr<scalar_t>();
         const scalar_t *data_strides_ = data_strides.data_ptr<scalar_t>();
         scalar_t *grad_strides_ = grad_strides.data_ptr<scalar_t>();
-        /*
-        stride_col2im_coord_gpu_kernel<<<
-            GET_BLOCKS(num_kernels), THREADS_PER_BLOCK, 0,
-            at::cuda::getCurrentCUDAStream()>>>(
-            num_kernels, data_col_, data_im_, data_strides_, channels, height,
-            width, ksize_h, ksize_w, pad_h, pad_w,
-            dilation_h, dilation_w, parallel_imgs,
-            //2 * ksize_h * ksize_w * deformable_group,
-            height_col, width_col, grad_strides_);
-		*/  
 		stride_col2im_coord_gpu_kernel<<<
             GET_BLOCKS(num_kernels), THREADS_PER_BLOCK, 0,
             at::cuda::getCurrentCUDAStream()>>>(
@@ -349,8 +337,7 @@ void StrideConvBackwardInputCUDAKernelLauncher(
     batch = 0;
     input = input.view({1, input.size(0), input.size(1), input.size(2)});
     //offset = offset.view({1, offset.size(0), offset.size(1), offset.size(2)});
-    gradOutput = gradOutput.view(
-        {1, gradOutput.size(0), gradOutput.size(1), gradOutput.size(2)});
+    gradOutput = gradOutput.view({1, gradOutput.size(0), gradOutput.size(1), gradOutput.size(2)});
   }
 
   long batchSize = input.size(0);
@@ -363,10 +350,8 @@ void StrideConvBackwardInputCUDAKernelLauncher(
   int dH = strides[0].item<int>();		
   int dW = strides[1].item<int>();
 	
-  long outputWidth =
-      (inputWidth + 2 * padW - (dilationW * (kW - 1) + 1)) / dW + 1;
-  long outputHeight =
-      (inputHeight + 2 * padH - (dilationH * (kH - 1) + 1)) / dH + 1;
+  long outputWidth = (inputWidth + 2 * padW - (dilationW * (kW - 1) + 1)) / dW + 1;
+  long outputHeight = (inputHeight + 2 * padH - (dilationH * (kH - 1) + 1)) / dH + 1;
 
   //TORCH_CHECK((offset.size(0) == batchSize), 3, "invalid batch size of offset");
   gradInput = gradInput.view({batchSize, nInputPlane, inputHeight, inputWidth});
@@ -413,8 +398,8 @@ void StrideConvBackwardInputCUDAKernelLauncher(
                             inputHeight, inputWidth, kH, kW, padH, padW,
                             dilationH, dilationW, im2col_step, grad_stride_temp[elt]);//gradStrides); //gradOffset[elt]);
     //std::cout << grad_stride_temp << std::endl;
-    std::cout << at::_shape_as_tensor(grad_stride_temp) << std::endl;
-	printf("shapes \n");  
+    std::cout << grad_stride_temp << std::endl;
+	printf("shapes     \n");  
 	Tensor grad_stride_b =   grad_stride_temp.sum( {1,2}, false);
     std::cout << at::_shape_as_tensor(grad_stride_b) << std::endl; 	  
 	  
@@ -434,8 +419,10 @@ void StrideConvBackwardInputCUDAKernelLauncher(
   //gradOffset = gradOffset.view({batchSize, deformable_group * 2 * kH * kW, outputHeight, outputWidth});
   //offset = offset.view({batchSize, deformable_group * 2 * kH * kW, outputHeight, outputWidth});
 
-  grad_stride_temp = grad_stride_temp.view({ batchSize / im2col_step, im2col_step , 2 , kW * kH, outputHeight, outputWidth });	
-  Tensor g_  = grad_stride_temp.sum( {0,1,3,4,5}, false);
+  //grad_stride_temp = grad_stride_temp.view({ batchSize / im2col_step, im2col_step , 2 , kW * kH, outputHeight, outputWidth });	
+  grad_stride_temp = grad_stride_temp.view({ batchSize ,  kW * kH* outputHeight* outputWidth, 2 });		
+  Tensor g_  = grad_stride_temp.sum( {1}, false).sum( {0}, false);
+  //Tensor g_  = grad_stride_temp.sum( {0,1,3,4,5}, false);
   std::cout << g_ << std::endl;	
   printf("%d, %d \n",g_[0],g_[1]);	
   gradStrides[0] = g_[0].item<float>();
@@ -495,7 +482,7 @@ void StrideConvBackwardParametersCUDAKernelLauncher(
   long outputWidth =  (inputWidth + 2 * padW - (dilationW * (kW - 1) + 1)) / dW + 1;
   long outputHeight = (inputHeight + 2 * padH - (dilationH * (kH - 1) + 1)) / dH + 1;
 
-  //TORCH_CHECK((offset.size(0) == batchSize), "invalid batch size of offset");
+  //TORCH_CHECK((offset.size(0) == batchSize), "invalid batch size of offset");  
 
   columns = at::zeros({nInputPlane * kW * kH, im2col_step * outputHeight * outputWidth}, input.options());
 
