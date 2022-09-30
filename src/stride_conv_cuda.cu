@@ -211,7 +211,7 @@ void stride_conv_shape_check(Tensor input, Tensor strides, Tensor *gradOutput,
 }
 
 void StrideConvForwardCUDAKernelLauncher(Tensor input, Tensor weight,
-                                         Tensor strides, Tensor output,
+                                         Tensor strides, Tensor bias, Tensor output,
                                          Tensor columns, Tensor ones, int kW,
                                          int kH, int padW,
                                          int padH, int dilationW, int dilationH,
@@ -278,6 +278,15 @@ void StrideConvForwardCUDAKernelLauncher(Tensor input, Tensor weight,
        output_buffer.size(2), output_buffer.size(3)});
 
 	
+  Tensor bias_g = bias.view({group, nOutputPlane/group});
+  printf("nOutputPlane %d \n ", nOutputPlane);	
+  //Tensor bias_g = at::ones({group, nOutputPlane/group},
+  //                                 output.options());
+
+  //printf("columns %d, %d, %d, \n ",  group, columns.size(0) / group, columns.size(1) );	
+  //printf("weight %d, %d, %d, %d, %d \n ",group, weight.size(0) / group,  weight.size(1), weight.size(2), weight.size(3) );	
+  //printf("gradOutput %d, %d, %d, %d, %d, %d \n ", gradOutput.size(0), group, gradOutput.size(1) / group, gradOutput.size(2), gradOutput.size(3), gradOutput.size(4) );	
+	
   for (int elt = 0; elt < batchSize / im2col_step; elt++) {
     stride_im2col(input[elt], strides, nInputPlane, inputHeight,
                       inputWidth, kH, kW, padH, padW, dilationH,
@@ -288,10 +297,23 @@ void StrideConvForwardCUDAKernelLauncher(Tensor input, Tensor weight,
                           weight.size(2), weight.size(3)});
 
     for (int g = 0; g < group; g++) {
-      output_buffer[elt][g] = output_buffer[elt][g]
-                                  .flatten(1)
-                                  .addmm_(weight[g].flatten(1), columns[g])
-                                  .view_as(output_buffer[elt][g]);
+      //output_buffer[elt][g] = output_buffer[elt][g]
+      //                            .flatten(1)
+      //                            .addmm_(weight[g].flatten(1), columns[g])
+      //                            .view_as(output_buffer[elt][g]);
+		
+	  std::cout << at::_shape_as_tensor(weight[g].flatten(1)) << std::endl;	
+	  std::cout << at::_shape_as_tensor(columns[g]) << std::endl;	
+	  std::cout << at::_shape_as_tensor(bias_g[g]) << std::endl;
+	  	  printf("da shapes \n");	
+	
+	  output_buffer[elt][g]  = (output_buffer[elt][g]
+                                  .flatten(1).addmm_(weight[g].flatten(1), columns[g]) + bias_g[g].view({bias_g[g].size(0),1}) ).view_as(output_buffer[elt][g]) ;
+		
+	  //output_buffer[elt][g]	= output_buffer[elt][g].flatten(1) +  bias_g[g].view({bias_g[g].size(0),1}) ;
+	  std::cout << at::_shape_as_tensor(output_buffer[elt][g].flatten(1)) << std::endl; 	  
+	  std::cout << at::_shape_as_tensor(bias_g[g]) << std::endl; 
+	  printf("da shapes \n");	
     }
     columns =
         columns.view({columns.size(0) * columns.size(1), columns.size(2)});
@@ -320,7 +342,7 @@ void StrideConvForwardCUDAKernelLauncher(Tensor input, Tensor weight,
 
 void StrideConvBackwardInputCUDAKernelLauncher(
     Tensor input, Tensor strides, Tensor gradOutput, Tensor gradInput,
-    Tensor gradStrides, Tensor weight, Tensor columns, int kW, int kH,
+    Tensor gradStrides, Tensor gradBias, Tensor weight, Tensor columns, int kW, int kH,
 	int padW, int padH, int dilationW, int dilationH, int group,
     int im2col_step) {
     
@@ -374,7 +396,9 @@ void StrideConvBackwardInputCUDAKernelLauncher(
   printf("weight %d, %d, %d, %d, %d \n ",group, weight.size(0) / group,  weight.size(1), weight.size(2), weight.size(3) );	
   printf("gradOutput %d, %d, %d, %d, %d, %d \n ", gradOutput.size(0), group, gradOutput.size(1) / group, gradOutput.size(2), gradOutput.size(3), gradOutput.size(4) );	
 
-  Tensor grad_stride_temp = at::zeros({batchSize / im2col_step, im2col_step , 2 * kW * kH, outputHeight, outputWidth}, input.options());  	
+  Tensor grad_stride_temp = at::zeros({batchSize / im2col_step, im2col_step , 2 * kW * kH, outputHeight, outputWidth}, input.options()); 
+  gradBias = gradBias.view({group, nOutputPlane/group});	
+	
   for (int elt = 0; elt < batchSize / im2col_step; elt++) {
     // divide into groups
     columns = columns.view({group, columns.size(0) / group, columns.size(1)});
@@ -386,6 +410,10 @@ void StrideConvBackwardInputCUDAKernelLauncher(
     for (int g = 0; g < group; g++) {
       columns[g] = columns[g].addmm_(weight[g].flatten(1).transpose(0, 1),
                                      gradOutput[elt][g].flatten(1), 0.0f, 1.0f);
+	  gradBias[g] = gradOutput[elt][g].transpose(0, 1).sum( {0,2,3}, false);	
+      std::cout <<   gradOutput[elt][g].transpose(0, 1).sum( {2,3}, false)   << std::endl; 	  
+	  printf("bias gradient \n");	
+		
     }
 
     columns = columns.view({columns.size(0) * columns.size(1), columns.size(2)});
@@ -432,7 +460,7 @@ void StrideConvBackwardInputCUDAKernelLauncher(
   //Tensor *grad_strides_	= gradStrides.data_ptr<Tensor>();
   //grad_strides_[0] = g_[0];
   //grad_strides_[1] = g_[1];	
-
+  gradBias = gradBias.view({nOutputPlane});	
 	
   
   if (batch == 0) {
