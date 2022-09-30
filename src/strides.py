@@ -9,6 +9,7 @@ from torch import Tensor
 from torch.autograd import Function
 from torch.autograd.function import once_differentiable
 from torch.nn.modules.utils import _pair, _single
+from torch.nn import init
 
 import stride_conv_cuda
 
@@ -36,11 +37,9 @@ class StrideConv2d(nn.Module):
                  padding: Union[int, Tuple[int, ...]] = 0,
                  dilation: Union[int, Tuple[int, ...]] = 1,
                  groups: int = 1,
-                 bias: bool = False) -> None:
+                 bias: bool = True) -> None:
         super(StrideConv2d, self).__init__()
 
-        assert not bias, \
-            f'bias={bias} is not supported in StrideConv2d.'
         assert in_channels % groups == 0, \
             f'in_channels {in_channels} cannot be divisible by groups {groups}'
         assert out_channels % groups == 0, \
@@ -55,21 +54,33 @@ class StrideConv2d(nn.Module):
         self.groups = groups
         self.transposed = False
         self.output_padding = _single(0)
-
+        self.use_bias = bias
+		
         # Define Learnable parameters
         self.weight = nn.Parameter( torch.Tensor(out_channels, in_channels // self.groups, *self.kernel_size))
         # TODO define only strides >= 1 with log(strides) + 1
         self.stride = nn.Parameter(torch.ones(2) )
-
+        
+        # If the use_bias is true the the bias will be zero for all the training (I assume) 		
+        self.bias = nn.Parameter(torch.zeros(out_channels) )
+         		
         # Initialize parameters		
         self.reset_parameters()
 
+        if self.use_bias is False :
+            self.bias.requires_grad = False
+			
     def reset_parameters(self):
         n = self.in_channels
         for k in self.kernel_size:
             n *= k
         stdv = 1. / math.sqrt(n)
         self.weight.data.uniform_(-stdv, stdv)
+		
+        if self.use_bias is True:
+            fan_in, _ = init._calculate_fan_in_and_fan_out(self.weight)
+            bound = 1 / math.sqrt(fan_in)
+            init.uniform_(self.bias, -bound, bound)		
 
     def forward(self, x: Tensor) -> Tensor:
         """Stride Convolutional forward function.
@@ -91,7 +102,7 @@ class StrideConv2d(nn.Module):
             x = F.pad(x, (0, pad_w, 0, pad_h), 'constant', 0).contiguous()
         
         # The computational part is done in the specific function		
-        out = stride_conv2d(x, self.weight, self.stride, self.padding,
+        out = stride_conv2d(x, self.weight, self.stride, self.bias, self.padding,
                             self.dilation, self.groups)
         if input_pad:
             out = out[:, :, :out.size(2) - pad_h, :out.size(3) -
@@ -100,14 +111,13 @@ class StrideConv2d(nn.Module):
 
     def __repr__(self):
         s = self.__class__.__name__
-        s += f'(in_channels={self.in_channels},\n'
-        s += f'out_channels={self.out_channels},\n'
-        s += f'kernel_size={self.kernel_size},\n'
-        s += f'padding={self.padding},\n'
-        s += f'dilation={self.dilation},\n'
-        s += f'groups={self.groups},\n'
-        # bias is not supported in DeformConv2d.
-        s += 'bias=False)'
+        s += f'(in_channels={self.in_channels}, '
+        s += f'out_channels={self.out_channels}, '
+        s += f'kernel_size={self.kernel_size}, '
+        s += f'padding={self.padding}, '
+        s += f'dilation={self.dilation}, '
+        s += f'groups={self.groups}, '
+        s += f'bias={self.use_bias})'
         return s		
 	
 class StrideConv2dFunction(Function):
@@ -117,17 +127,17 @@ class StrideConv2dFunction(Function):
                 input,
                 weight,
                 stride,
+				bias,
                 padding=0,
                 dilation=1,
                 groups=1,
-                bias=False,
                 im2col_step=32):
 		
         if input is not None and input.dim() != 4:
             raise ValueError(
                 f'Expected 4D tensor as input, got {input.dim()}D tensor \
                   instead.')
-        assert bias is False, 'Only support bias is False.'
+        #assert bias is False, 'Only support bias is False.'
         ctx.padding = _pair(padding)
         ctx.dilation = _pair(dilation)
         ctx.groups = groups
@@ -139,7 +149,7 @@ class StrideConv2dFunction(Function):
         		
         input = input.type_as(stride)
         weight = weight.type_as(input)
-        ctx.save_for_backward(input, weight, stride)
+        ctx.save_for_backward(input, weight, stride, bias)
         
         		
 		
@@ -157,6 +167,7 @@ class StrideConv2dFunction(Function):
             input,
             weight,
             stride,
+			bias,
             output,
             ctx.bufs_[0],
             ctx.bufs_[1],
@@ -173,9 +184,9 @@ class StrideConv2dFunction(Function):
     @staticmethod
     @once_differentiable
     def backward(ctx, grad_output):
-        input, weight, strides = ctx.saved_tensors
+        input, weight, strides, bias = ctx.saved_tensors
 
-        grad_input = grad_stride = grad_weight = None
+        grad_input = grad_stride = grad_weight = grad_bias =None
 
         cur_im2col_step = min(ctx.im2col_step, input.size(0))
         assert (input.size(0) %
@@ -189,6 +200,8 @@ class StrideConv2dFunction(Function):
         grad_input = torch.zeros_like(input)
         grad_stride = torch.zeros_like(strides)
         grad_weight = torch.zeros_like(weight)
+        grad_bias = torch.zeros_like(bias)
+		
 		
         if ctx.needs_input_grad[0] or ctx.needs_input_grad[1]:
             grad_input = torch.zeros_like(input)
@@ -202,6 +215,7 @@ class StrideConv2dFunction(Function):
                 grad_output,
                 grad_input,
                 grad_stride,
+                grad_bias,				
                 weight,
                 ctx.bufs_[0],
                 weight.size(3),
@@ -234,7 +248,7 @@ class StrideConv2dFunction(Function):
                 1,
                 cur_im2col_step)
         print(grad_weight)   
-        return grad_input,  grad_weight, grad_stride, \
+        return grad_input,  grad_weight, grad_stride, grad_bias, \
             None, None, None, None, None, None, None
 
     @staticmethod
