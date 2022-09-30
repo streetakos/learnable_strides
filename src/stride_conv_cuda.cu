@@ -397,7 +397,7 @@ void StrideConvBackwardInputCUDAKernelLauncher(
   printf("gradOutput %d, %d, %d, %d, %d, %d \n ", gradOutput.size(0), group, gradOutput.size(1) / group, gradOutput.size(2), gradOutput.size(3), gradOutput.size(4) );	
 
   Tensor grad_stride_temp = at::zeros({batchSize / im2col_step, im2col_step , 2 * kW * kH, outputHeight, outputWidth}, input.options()); 
-  gradBias = gradBias.view({group, nOutputPlane/group});	
+  gradBias = gradBias.view({group, nOutputPlane/group});	   
 	
   for (int elt = 0; elt < batchSize / im2col_step; elt++) {
     // divide into groups
