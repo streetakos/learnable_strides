@@ -48,11 +48,11 @@ class TestStrideConv:
         # Hyperparameters
         c_in = 4
         c_out = 4
-        batch_size = 10
+        batch_size = 5
         ks = 2	# Not to be changed
         pad = 0		
         stride = 1
-        use_bias = True		
+        use_bias = False		
         bi = torch.randn(c_out)		
 	
 		
@@ -73,7 +73,7 @@ class TestStrideConv:
         model = StrideConv2d(in_channels=c_in, out_channels=c_out, kernel_size=2, padding=pad, bias=use_bias)
         model.weight.data = w_#torch.nn.Parameter(torch.Tensor(deform_weight).reshape(1, 1, 2, 2))
         # Strides initialized wih ones		
-        model.stride.data = model.stride.data + (stride-1.0)
+        model.stride.data = model.stride.data + (stride-1.0) #+0.4
 
         if use_bias:		
             model.bias = torch.nn.Parameter(bi)
@@ -82,7 +82,7 @@ class TestStrideConv:
         model.type(dtype)
         
         out = model(x) 
-        grad_out =  torch.randn_like(out)			
+        grad_out =  torch.ones_like(out)#torch.randn_like(out)			
         out.backward(grad_out)	#ones_like	
 		
         # Define a standard convolutional model
@@ -100,10 +100,10 @@ class TestStrideConv:
         out_2.backward(grad_out)		
         #print(out)		
 		
-        print(out)		
-        print(out_2)		 
-        print(model)		
-        print(model_2)		
+        #print(out)		
+        #print(out_2)		 
+        #print(model)		
+        print(model.stride.grad)		
 	
 		
         # Check if the gradients and the output are all close		
