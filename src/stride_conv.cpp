@@ -4,7 +4,7 @@
 
 #ifdef MMCV_WITH_CUDA
 void StrideConvForwardCUDAKernelLauncher(Tensor input, Tensor weight,
-                                         Tensor strides, Tensor output,
+                                         Tensor strides, Tensor bias,  Tensor output,
                                          Tensor columns, Tensor ones, int kW,
                                          int kH, int padW,
                                          int padH, int dilationW, int dilationH,
@@ -13,7 +13,7 @@ void StrideConvForwardCUDAKernelLauncher(Tensor input, Tensor weight,
 
 void StrideConvBackwardInputCUDAKernelLauncher(
     Tensor input, Tensor strides, Tensor gradOutput, Tensor gradInput,
-    Tensor gradStrides, Tensor weight, Tensor columns, int kW, int kH, 
+    Tensor gradStrides, Tensor gradBias, Tensor weight, Tensor columns, int kW, int kH, 
 	int padW, int padH, int dilationW, int dilationH, int group,
 	int im2col_step);
 
@@ -23,23 +23,23 @@ void StrideConvBackwardParametersCUDAKernelLauncher(
     int padH, int dilationW, int dilationH, int group,
     float scale, int im2col_step);
 
-void stride_conv_forward_cuda(Tensor input, Tensor weight, Tensor strides,
+void stride_conv_forward_cuda(Tensor input, Tensor weight, Tensor strides,  Tensor bias,
                               Tensor output, Tensor columns, Tensor ones,
                               int kW, int kH, int padW,
                               int padH, int dilationW, int dilationH, int group, int im2col_step) {
   StrideConvForwardCUDAKernelLauncher(
-      input, weight, strides, output, columns, ones, kW, kH, padW, padH,
+      input, weight, strides, bias,  output, columns, ones, kW, kH, padW, padH,
       dilationW, dilationH, group, im2col_step);
 }
 
 void stride_conv_backward_input_cuda(Tensor input, Tensor strides,
                                      Tensor gradOutput, Tensor gradInput,
-                                     Tensor gradStrides, Tensor weight,
+                                     Tensor gradStrides,Tensor gradBias, Tensor weight,
                                      Tensor columns, int kW, int kH, int padW, int padH, int dilationW,
                                      int dilationH, int group,
                                      int im2col_step) {
   StrideConvBackwardInputCUDAKernelLauncher(
-      input, strides, gradOutput, gradInput, gradStrides, weight, columns, kW, kH,
+      input, strides, gradOutput, gradInput, gradStrides, gradBias, weight, columns, kW, kH,
       padW, padH, dilationW, dilationH, group, 
       im2col_step);
 }
@@ -56,7 +56,7 @@ void stride_conv_backward_parameters_cuda(
 }
 #endif
 
-void stride_conv_forward(Tensor input, Tensor weight, Tensor strides,
+void stride_conv_forward(Tensor input, Tensor weight, Tensor strides, Tensor bias, 
                          Tensor output, Tensor columns, Tensor ones, int kW,
                          int kH, int padW, int padH,
                          int dilationW, int dilationH, int group, int im2col_step) {
@@ -68,10 +68,10 @@ void stride_conv_forward(Tensor input, Tensor weight, Tensor strides,
     CHECK_CUDA_INPUT(output);
     CHECK_CUDA_INPUT(columns);
     CHECK_CUDA_INPUT(ones);
-    
+    CHECK_CUDA_INPUT(bias);
 	//printf("Call to Cpp files completed \n");
 	  
-    stride_conv_forward_cuda(input, weight, strides, output, columns, ones, kW,
+    stride_conv_forward_cuda(input, weight, strides, bias,  output, columns, ones, kW,
                              kH, padW, padH, dilationW, dilationH,
                              group, im2col_step);
 #else
@@ -83,7 +83,7 @@ void stride_conv_forward(Tensor input, Tensor weight, Tensor strides,
 }
 
 void stride_conv_backward_input(Tensor input, Tensor strides, Tensor gradOutput,
-                                Tensor gradInput, Tensor gradStrides,
+                                Tensor gradInput, Tensor gradStrides, Tensor gradBias,
                                 Tensor weight, Tensor columns, int kW, int kH, int padW, int padH,
                                 int dilationW, int dilationH, int group, int im2col_step) {
   if (input.device().is_cuda()) {
@@ -95,9 +95,10 @@ void stride_conv_backward_input(Tensor input, Tensor strides, Tensor gradOutput,
     CHECK_CUDA_INPUT(gradStrides);
     CHECK_CUDA_INPUT(weight);
     CHECK_CUDA_INPUT(columns);
+	CHECK_CUDA_INPUT(gradBias);  
 
     stride_conv_backward_input_cuda(input, strides, gradOutput, gradInput,
-                                    gradStrides, weight, columns, kW, kH,
+                                    gradStrides,gradBias, weight, columns, kW, kH,
                                     padW, padH, dilationW, dilationH, group,
                                     im2col_step);
 #else
