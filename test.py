@@ -48,13 +48,13 @@ class TestStrideConv:
         # Hyperparameters
         c_in = 4
         c_out = 4
-        batch_size = 1
+        batch_size = 10
         ks = 2	# Not to be changed
         pad = 0		
         stride = 1
-        use_bias = False		
+        use_bias = True		
         bi = torch.randn(c_out)		
-        grad_out =  torch.randn_like(out)		
+	
 		
         # Define input		
         repeated_input = np.repeat(input, batch_size, axis=0)
@@ -82,7 +82,7 @@ class TestStrideConv:
         model.type(dtype)
         
         out = model(x) 
-		
+        grad_out =  torch.randn_like(out)			
         out.backward(grad_out)	#ones_like	
 		
         # Define a standard convolutional model
@@ -171,6 +171,4 @@ class TestStrideConv:
 				
 td = TestStrideConv()
 td._test_strideconv()
-
-
 
