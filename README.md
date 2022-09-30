@@ -32,3 +32,5 @@ See `test.py` for example usage.
 - [x] Add Biases to the Conv Layer
 - [ ] Check the gradients of strides
 - [ ] Account for batches in strides of gradient (I think pytorch does this automatically)
+- [ ] Learn only positive strides (log_strides ?)
+
