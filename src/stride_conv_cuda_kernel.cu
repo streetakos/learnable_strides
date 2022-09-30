@@ -361,19 +361,21 @@ __global__ void stride_col2im_coord_gpu_kernel(
       int w_out = col_pos % width_col;
       int h_out = (col_pos / width_col) % height_col;
       
-	  int w_in = w_out * stride_w - pad_w;
-      int h_in = h_out * stride_h - pad_h; 
+	  float w_in = w_out * stride_w - pad_w;
+      float h_in = h_out * stride_h - pad_h; 
       
       
-      printf("i=%3d, j=%3d, c=%3d, b=%3d col_pos=%3d w_out=%3d h_out=%3d \n",i,j,c,b,col_pos, w_out, h_out);		
+      printf("i=%3d, j=%3d, c=%3d, b=%3d col_pos=%3d w_in=%3f h_in=%3f \n",i,j,c,b,col_pos, w_in, h_in);		
 	  //const int data_offset_h_ptr = (((2 * (i * kernel_w + j)) * height_col + h_out) * width_col + w_out);
       //const int data_offset_w_ptr = (((2 * (i * kernel_w + j) + 1) * height_col + h_out) * width_col +  w_out);
       //const T offset_h = data_offset_ptr[data_offset_h_ptr];
       //const T offset_w = data_offset_ptr[data_offset_w_ptr];
 		
-      T inv_h = h_in + i * dilation_h; // + offset_h;
-      T inv_w = w_in + j * dilation_w; // + offset_w;
-	  	
+      //T inv_h = h_in + i * dilation_h; // + offset_h;
+      //T inv_w = w_in + j * dilation_w; // + offset_w;
+	  T inv_h = h_out * stride_h - pad_h + i * dilation_h; // + offset_h;
+	  T inv_w = w_out * stride_w - pad_w + j * dilation_w; // + offset_w;
+		
       if (inv_h <= -1 || inv_w <= -1 || inv_h >= height || inv_w >= width)
         inv_h = inv_w = -2;
       const T weight = get_coordinate_weight(inv_h, inv_w, height, width, data_im_ptr + cnt * height * width, width, bp_dir);
