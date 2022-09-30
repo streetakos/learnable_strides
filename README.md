@@ -29,6 +29,6 @@ See `test.py` for example usage.
 - [x] Forward Pass
 - [x] Backward Pass
 - [x] Gradiets of operations with integer strides match the standard results
+- [x] Add Biases to the Conv Layer
 - [ ] Check the gradients of strides
 - [ ] Account for batches in strides of gradient (I think pytorch does this automatically)
-- [ ] Add Biases to the Conv Layer
