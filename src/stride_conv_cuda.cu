@@ -2,6 +2,7 @@
 #include "stride_conv_cuda_kernel.cu"
 #include "pytorch_cuda_helper.hpp"
 #include <cstdio>
+#include <cmath>
 
 void stride_im2col(Tensor data_im, Tensor strides, const int channels,
                        const int height, const int width, const int ksize_h,
@@ -39,6 +40,38 @@ void stride_im2col(Tensor data_im, Tensor strides, const int channels,
   AT_CUDA_CHECK(cudaGetLastError());
 }
 
+void stride_col2im_pytorch(Tensor data_col, Tensor data_strides, const int channels,
+                       const int height, const int width, const int ksize_h,
+                       const int ksize_w, const int pad_h, const int pad_w,
+                       const int dilation_h, const int dilation_w,
+                       const int parallel_imgs, Tensor grad_im) {
+	
+  int stride_h = data_strides[0].item<int>();	
+  int stride_w = data_strides[1].item<int>();
+	
+  int num_kernels = channels * height * width;	
+  //Compute output height and width	
+  int height_col = (height + 2 * pad_h - (dilation_h * (ksize_h - 1) + 1)) / stride_h + 1;
+  int width_col = (width + 2 * pad_w - (dilation_w * (ksize_w - 1) + 1)) / stride_w + 1;
+  //int num_kernels = channels * ksize_h * ksize_w * height_col * width_col * parallel_imgs;  
+  //int channel_per_deformable_group = channels / deformable_group;
+
+  AT_DISPATCH_FLOATING_TYPES_AND_HALF(
+      data_col.scalar_type(), "stride_col2im_gpu", ([&] {
+        const scalar_t *data_col_ = data_col.data_ptr<scalar_t>(); 
+        const scalar_t *data_strides_ = data_strides.data_ptr<scalar_t>();
+        scalar_t *grad_im_ = grad_im.data_ptr<scalar_t>();
+
+        stride_col2im_pytorch_gpu_kernel<<<GET_BLOCKS(num_kernels), 
+                                       THREADS_PER_BLOCK, 0, 
+                                       at::cuda::getCurrentCUDAStream()>>>(
+            num_kernels, data_col_, data_strides_, channels, height, width,
+            ksize_h, ksize_w, stride_h, stride_w, pad_h, pad_w, dilation_h,
+            dilation_w, parallel_imgs, height_col, width_col, grad_im_);
+      }));
+  AT_CUDA_CHECK(cudaGetLastError());
+}	
+	
 void stride_col2im(Tensor data_col, Tensor data_strides, const int channels,
                        const int height, const int width, const int ksize_h,
                        const int ksize_w, const int pad_h, const int pad_w,
@@ -51,17 +84,17 @@ void stride_col2im(Tensor data_col, Tensor data_strides, const int channels,
   // todo: make sure parallel_imgs is passed in correctly
   int height_col = (height + 2 * pad_h - (dilation_h * (ksize_h - 1) + 1)) / stride_h + 1;
   int width_col = (width + 2 * pad_w - (dilation_w * (ksize_w - 1) + 1)) / stride_w + 1;
-  int num_kernels = channels * ksize_h * ksize_w * height_col * width_col * parallel_imgs;
+  int num_kernels = channels * ksize_h * ksize_w * height_col * width_col * parallel_imgs;  
   //int channel_per_deformable_group = channels / deformable_group;
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(
       data_col.scalar_type(), "stride_col2im_gpu", ([&] {
-        const scalar_t *data_col_ = data_col.data_ptr<scalar_t>();
+        const scalar_t *data_col_ = data_col.data_ptr<scalar_t>(); 
         const scalar_t *data_strides_ = data_strides.data_ptr<scalar_t>();
         scalar_t *grad_im_ = grad_im.data_ptr<scalar_t>();
 
-        stride_col2im_gpu_kernel<<<GET_BLOCKS(num_kernels),
-                                       THREADS_PER_BLOCK, 0,
+        stride_col2im_gpu_kernel<<<GET_BLOCKS(num_kernels), 
+                                       THREADS_PER_BLOCK, 0, 
                                        at::cuda::getCurrentCUDAStream()>>>(
             num_kernels, data_col_, data_strides_, channels, height, width,
             ksize_h, ksize_w, pad_h, pad_w, dilation_h,
@@ -211,7 +244,7 @@ void stride_conv_shape_check(Tensor input, Tensor strides, Tensor *gradOutput,
 }
 
 void StrideConvForwardCUDAKernelLauncher(Tensor input, Tensor weight,
-                                         Tensor strides, Tensor bias, Tensor output,
+                                         Tensor sstrides, Tensor bias, Tensor output,
                                          Tensor columns, Tensor ones, int kW,
                                          int kH, int padW,
                                          int padH, int dilationW, int dilationH,
@@ -223,9 +256,15 @@ void StrideConvForwardCUDAKernelLauncher(Tensor input, Tensor weight,
   // transpose output) todo: possibly change data indexing because of
   // parallel_imgs
 
+  at::DeviceGuard guard(input.device());
+
+  // Added code for log(strides)	
+  Tensor strides = at::zeros({2}, sstrides.options());	
+  strides[0] = at::exp( sstrides[0]) + 1.0;	
+  strides[1] = at::exp( sstrides[1]) + 1.0;		
+	
   stride_conv_shape_check(input, strides, NULL, weight, kH, kW, padH,
                           padW, dilationH, dilationW, group );
-  at::DeviceGuard guard(input.device());
   
   int batch = 1;
   if (input.ndimension() == 3) {
@@ -279,7 +318,8 @@ void StrideConvForwardCUDAKernelLauncher(Tensor input, Tensor weight,
 
 	
   Tensor bias_g = bias.view({group, nOutputPlane/group});
-  printf("nOutputPlane %d \n ", nOutputPlane);	
+  //printf("nOutputPlane %d \n ", nOutputPlane);
+  //printf("im2col_step %d \n",im2col_step);	
   //Tensor bias_g = at::ones({group, nOutputPlane/group},
   //                                 output.options());
 
@@ -302,18 +342,20 @@ void StrideConvForwardCUDAKernelLauncher(Tensor input, Tensor weight,
       //                            .addmm_(weight[g].flatten(1), columns[g])
       //                            .view_as(output_buffer[elt][g]);
 		
-	  std::cout << at::_shape_as_tensor(weight[g].flatten(1)) << std::endl;	
-	  std::cout << at::_shape_as_tensor(columns[g]) << std::endl;	
-	  std::cout << at::_shape_as_tensor(bias_g[g]) << std::endl;
-	  	  printf("da shapes \n");	
+	  //std::cout << at::_shape_as_tensor(weight[g].flatten(1)) << std::endl;	
+	  //std::cout << at::_shape_as_tensor(columns[g]) << std::endl;	
+	  //std::cout << at::_shape_as_tensor(bias_g[g]) << std::endl;
+	  	  //printf("da shapes \n");	
 	
+      // Where im2col_step = batch_size (in general)		
+      // Output Buffer {c_out, im2col_step*outH*outW}		
 	  output_buffer[elt][g]  = (output_buffer[elt][g]
-                                  .flatten(1).addmm_(weight[g].flatten(1), columns[g]) + bias_g[g].view({bias_g[g].size(0),1}) ).view_as(output_buffer[elt][g]) ;
+                                  .flatten(1).addmm_(weight[g].flatten(1), columns[g]) + bias_g[g].view({bias_g[g].size(0),1})  ).view_as(output_buffer[elt][g]) ;
 		
 	  //output_buffer[elt][g]	= output_buffer[elt][g].flatten(1) +  bias_g[g].view({bias_g[g].size(0),1}) ;
-	  std::cout << at::_shape_as_tensor(output_buffer[elt][g].flatten(1)) << std::endl; 	  
-	  std::cout << at::_shape_as_tensor(bias_g[g]) << std::endl; 
-	  printf("da shapes \n");	
+	  //std::cout << at::_shape_as_tensor(output_buffer[elt][g].flatten(1)) << std::endl; 	  
+	  //std::cout << at::_shape_as_tensor(bias_g[g]) << std::endl; 
+	  //printf("da shapes \n");	
     }
     columns =
         columns.view({columns.size(0) * columns.size(1), columns.size(2)});
@@ -341,16 +383,22 @@ void StrideConvForwardCUDAKernelLauncher(Tensor input, Tensor weight,
 }
 
 void StrideConvBackwardInputCUDAKernelLauncher(
-    Tensor input, Tensor strides, Tensor gradOutput, Tensor gradInput,
+    Tensor input, Tensor sstrides, Tensor gradOutput, Tensor gradInput,
     Tensor gradStrides, Tensor gradBias, Tensor weight, Tensor columns, int kW, int kH,
 	int padW, int padH, int dilationW, int dilationH, int group,
     int im2col_step) {
     
+  at::DeviceGuard guard(input.device());
+	
+  // Added code for log(strides)		
+  Tensor strides = at::zeros({2},      sstrides.options());	
+  strides[0] = at::exp( sstrides[0]) + 1.0;	
+  strides[1] = at::exp( sstrides[1]) + 1.0;	
+
   //deform_conv_shape_check(input, offset, &gradOutput, weight, kH, kW, dH, dW,
   //                        padH, padW, dilationH, dilationW, group,
   //                        deformable_group);
 	
-  at::DeviceGuard guard(input.device());
 
   int batch = 1;
 
@@ -363,12 +411,16 @@ void StrideConvBackwardInputCUDAKernelLauncher(
   }
 
   long batchSize = input.size(0);
-  long nInputPlane = input.size(1);
+  long nInputPlane = input.size(1);  
   long inputHeight = input.size(2);
   long inputWidth = input.size(3);
 
   long nOutputPlane = weight.size(0);
-
+	
+  long ws0 = 	weight.size(0);
+  long ws1 = 	weight.size(1);
+  long ws2 = 	weight.size(2);
+  long ws3 = 	weight.size(3);	
   int dH = strides[0].item<int>();		
   int dW = strides[1].item<int>();
 	
@@ -385,21 +437,22 @@ void StrideConvBackwardInputCUDAKernelLauncher(
   gradOutput = gradOutput.view({batchSize / im2col_step, im2col_step,  nOutputPlane, outputHeight, outputWidth});
   gradOutput.transpose_(1, 2);
   gradInput = gradInput.view({batchSize / im2col_step, im2col_step, nInputPlane, inputHeight, inputWidth});
-  input = input.view({batchSize / im2col_step, im2col_step, nInputPlane, inputHeight, inputWidth});
+  input = input.view({batchSize / im2col_step, im2col_step, nInputPlane, inputHeight, inputWidth}); 
   //gradOffset = gradOffset.view({batchSize / im2col_step, im2col_step,
   //                              deformable_group * 2 * kH * kW, outputHeight,
   //                              outputWidth});
   //offset = offset.view({batchSize / im2col_step, im2col_step,
   //                 deformable_group * 2 * kH * kW, outputHeight, outputWidth});
 
-  printf("columns %d, %d, %d, \n ",  group, columns.size(0) / group, columns.size(1) );	
-  printf("weight %d, %d, %d, %d, %d \n ",group, weight.size(0) / group,  weight.size(1), weight.size(2), weight.size(3) );	
-  printf("gradOutput %d, %d, %d, %d, %d, %d \n ", gradOutput.size(0), group, gradOutput.size(1) / group, gradOutput.size(2), gradOutput.size(3), gradOutput.size(4) );	
+  //printf("columns %d, %d, %d, \n ",  group, columns.size(0) / group, columns.size(1) );	
+  //printf("weight %d, %d, %d, %d, %d \n ",group, weight.size(0) / group,  weight.size(1), weight.size(2), weight.size(3) );	
+  //printf("gradOutput %d, %d, %d, %d, %d, %d \n ", gradOutput.size(0), group, gradOutput.size(1) / group, gradOutput.size(2), gradOutput.size(3), gradOutput.size(4) );	
 
-  Tensor grad_stride_temp = at::zeros({batchSize / im2col_step, im2col_step , 2 * kW * kH, outputHeight, outputWidth}, input.options()); 
+  Tensor grad_stride_temp = at::zeros({batchSize / im2col_step, im2col_step , 2 * kW * kH, outputHeight, outputWidth}, strides.options()); 
   gradBias = gradBias.view({group, nOutputPlane/group});	   
 	
   for (int elt = 0; elt < batchSize / im2col_step; elt++) {
+	// Multiply each weight with each outputpixel and sum the output dimentions via multiplication  
     // divide into groups
     columns = columns.view({group, columns.size(0) / group, columns.size(1)});
     weight = weight.view({ group, weight.size(0) / group, weight.size(1), weight.size(2), weight.size(3)});
@@ -408,54 +461,85 @@ void StrideConvBackwardInputCUDAKernelLauncher(
     // From the chain rule: 
 	//G_offset = gradOutput * W * G_interpolated_value,  Compute: gradOutput * W 	  
     for (int g = 0; g < group; g++) {
-      columns[g] = columns[g].addmm_(weight[g].flatten(1).transpose(0, 1),
+      columns[g] = columns[g].addmm_(weight[g].flatten(1).transpose(0, 1),       
                                      gradOutput[elt][g].flatten(1), 0.0f, 1.0f);
-	  gradBias[g] = gradOutput[elt][g].transpose(0, 1).sum( {0,2,3}, false);	
-      std::cout <<   gradOutput[elt][g].transpose(0, 1).sum( {2,3}, false)   << std::endl; 	  
-	  printf("bias gradient \n");	
+	  gradBias[g] = gradOutput[elt][g].transpose(0, 1).sum( {0,2,3}, false) ; ///////////////////////////////////////////////////////////////////
 		
-    }
+    }  
 
     columns = columns.view({columns.size(0) * columns.size(1), columns.size(2)});
     gradOutput = gradOutput.view({gradOutput.size(0), gradOutput.size(1) * gradOutput.size(2), gradOutput.size(3), gradOutput.size(4), gradOutput.size(5)});
     
-	//Added
-	//Tensor grad_stride_temp = at::zeros({im2col_step , 2 * kW * kH, outputHeight, outputWidth}, input.options());  
-	  
     stride_col2im_coord(columns, input[elt], strides, nInputPlane,
                             inputHeight, inputWidth, kH, kW, padH, padW,
-                            dilationH, dilationW, im2col_step, grad_stride_temp[elt]);//gradStrides); //gradOffset[elt]);
-    //std::cout << grad_stride_temp << std::endl;
-    std::cout << grad_stride_temp << std::endl;
-	printf("shapes     \n");  
+                            dilationH, dilationW, im2col_step, grad_stride_temp[elt]);
+ 
 	Tensor grad_stride_b =   grad_stride_temp.sum( {1,2}, false);
-    std::cout << at::_shape_as_tensor(grad_stride_b) << std::endl; 	  
-	  
-    stride_col2im(columns, strides, nInputPlane, inputHeight,
-                      inputWidth, kH, kW, padH, padW, dilationH,
-                      dilationW, im2col_step, gradInput[elt]);
+    
+	// Function deterministic faster  
+    //stride_col2im(columns, strides, nInputPlane, inputHeight, 
+    //                  inputWidth, kH, kW, padH, padW, dilationH,
+    //                  dilationW, im2col_step, gradInput[elt]);
     weight = weight.view({weight.size(0) * weight.size(1), weight.size(2),
                           weight.size(3), weight.size(4)});
 						  
   }
-   
+  //std::cout << at::_shape_as_tensor(columns) << std::endl; 
+  //std::cout << at::_shape_as_tensor(gradInput) << std::endl;  
+ 
+  //TODO columns addmm
+  	
+  //columns = columns.view( {nInputPlane * kW * kH,  outputHeight * outputWidth ,im2col_step } ).transpose_(1, 2).transpose_(0, 1);
+  //std::cout << columns[0] << std::endl; 	
+	
+  //columns = columns.view( {nInputPlane * kW * kH,  im2col_step, outputHeight * outputWidth  } ).transpose_(0, 1);
+  //std::cout << columns[0] << std::endl; 	
+  
+  
+
+  //std::cout << at::_shape_as_tensor(weight) << std::endl; 
+  //printf("%d , %d, %d, %d \n",ws0,  ws1, ws2, ws3);		 
+
   gradOutput.transpose_(1, 2);
   gradOutput = gradOutput.view({batchSize, nOutputPlane, outputHeight, outputWidth});
-
+ 	
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  // Code adopted from pytorch for avoiding atomicadd operation (Deterministic)	
+  ///*	
+  gradInput = gradInput.view({batchSize , nInputPlane, inputHeight, inputWidth});
+  weight = weight.view({  ws0 , ws1, ws2, ws3});
+  //std::cout << at::_shape_as_tensor(gradOutput) << std::endl;	
+  
+  	
+  for (int elt = 0; elt < batchSize ; elt++) {
+	Tensor columnsa = at::zeros({nInputPlane * kW * kH, outputHeight * outputWidth},input.options());
+	  
+	columnsa = columnsa.addmm_(weight.flatten(1).transpose(0, 1),       
+                                     gradOutput[elt].flatten(1), 0.0f, 1.0f);  
+	  
+	stride_col2im_pytorch(columnsa, strides, nInputPlane, inputHeight, 
+                      inputWidth, kH, kW, padH, padW, dilationH,
+                      dilationW, im2col_step, gradInput[elt]);  
+  } 
+  //printf("ELA KOMPLE \n");
+  //*/	
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////////	
+  
   gradInput = gradInput.view({batchSize, nInputPlane, inputHeight, inputWidth});
   input = input.view({batchSize, nInputPlane, inputHeight, inputWidth});
   //gradOffset = gradOffset.view({batchSize, deformable_group * 2 * kH * kW, outputHeight, outputWidth});
   //offset = offset.view({batchSize, deformable_group * 2 * kH * kW, outputHeight, outputWidth});
 
-  //grad_stride_temp = grad_stride_temp.view({ batchSize / im2col_step, im2col_step , 2 , kW * kH, outputHeight, outputWidth });	
+  // The above code gives as the gradients wrt strides in shape of { batchSize ,  kW * kH* outputHeight* outputWidth, 2 }
+  // Sum the redantant dimentions in order to obtain the gradients for the strides 	
   grad_stride_temp = grad_stride_temp.view({ batchSize ,  kW * kH* outputHeight* outputWidth, 2 });		
   Tensor g_  = grad_stride_temp.sum( {1}, false).sum( {0}, false);
   //Tensor g_  = grad_stride_temp.sum( {0,1,3,4,5}, false);
-  std::cout << g_ << std::endl;	
-  printf("%d, %d \n",g_[0],g_[1]);	
-  gradStrides[0] = g_[0].item<float>();
-  gradStrides[1] = g_[1].item<float>();;
-  std::cout << gradStrides << std::endl;	
+  //std::cout << g_ << std::endl;	
+  //printf("%d, %d \n",g_[0],g_[1]);	
+  gradStrides[0] = g_[0] * (strides[0]-1.0); //.item<float>()
+  gradStrides[1] = g_[1] * (strides[1]-1.0);
+  //std::cout << gradStrides << std::endl;	
   //auto grad_strides_ = gradStrides.data_ptr();//.data_ptr<float>();//.data_ptr<scalar_t>();	
   //Tensor *grad_strides_	= gradStrides.data_ptr<Tensor>();
   //grad_strides_[0] = g_[0];
@@ -474,20 +558,23 @@ void StrideConvBackwardInputCUDAKernelLauncher(
 }
 
 void StrideConvBackwardParametersCUDAKernelLauncher(
-    Tensor input, Tensor strides, Tensor gradOutput, Tensor gradWeight,
+    Tensor input, Tensor sstrides, Tensor gradOutput, Tensor gradWeight,
     Tensor columns, Tensor ones, int kW, int kH, int padW,
     int padH, int dilationW, int dilationH, int group,
     float scale, int im2col_step) {
   // todo: transpose and reshape outGrad
   // todo: reshape columns
   // todo: add im2col_step as input
+  at::DeviceGuard guard(input.device());
 
-  
+  // Added code for log(strides)	
+  Tensor strides = at::zeros({2},      sstrides.options());		
+  strides[0] = at::exp( sstrides[0]) + 1.0;	
+  strides[1] = at::exp( sstrides[1]) + 1.0;	  
   //deform_conv_shape_check(input, offset, &gradOutput, gradWeight, kH, kW, dH,
   //                        dW, padH, padW, dilationH, dilationW, group,
   //                        deformable_group);
-  at::DeviceGuard guard(input.device());
-
+  
   int batch = 1;
 
   if (input.ndimension() == 3) {
