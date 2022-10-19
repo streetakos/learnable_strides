@@ -256,6 +256,62 @@ __global__ void stride_im2col_gpu_kernel(
   }
 }
 
+
+
+template <typename T>
+__global__ void  stride_col2im_pytorch_gpu_kernel(
+    const int n,   const T  *data_col, const T *data_strides,  const int channels, const int height,
+    const int width, const int kernel_h, const int kernel_w, 
+	const int stride_height, const int stride_width, 
+	const int pad_height,  const int pad_width,
+    const int dilation_height,  const int dilation_width, const int batch_size,  const int height_col,
+    const int width_col,  T* data_im) {
+	
+
+  CUDA_1D_KERNEL_LOOP(index, n) {
+	  
+    T val = 0;
+    const int w_im = index % width + pad_width;
+    const int h_im = (index / width) % height + pad_height;
+    const int c_im = index / (width * height);
+    int kernel_extent_w = (kernel_w - 1) * dilation_width + 1;
+    int kernel_extent_h = (kernel_h - 1) * dilation_height + 1;
+	  
+    // compute the start and end of the output
+    const int w_col_start = (w_im < kernel_extent_w)
+        ? 0
+        : (w_im - kernel_extent_w) / stride_width + 1;
+    const int w_col_end = ::min(w_im / stride_width + 1, width_col);
+    const int h_col_start = (h_im < kernel_extent_h)
+        ? 0
+        : (h_im - kernel_extent_h) / stride_height + 1;
+    const int h_col_end = ::min(h_im / stride_height + 1, height_col);
+
+	const T stride_h = data_strides[0];
+    const T stride_w = data_strides[1];   
+    // TODO: use LCM of stride and dilation to avoid unnecessary loops
+    for (int h_col = h_col_start; h_col < h_col_end; h_col += 1) {
+      for (int w_col = w_col_start; w_col < w_col_end; w_col += 1) {
+		  
+        int h_k = (h_im - h_col * stride_height);
+        int w_k = (w_im - w_col * stride_width);
+        if (h_k % dilation_height == 0 && w_k % dilation_width == 0) {
+          h_k /= dilation_height;
+          w_k /= dilation_width;
+			
+          int data_col_index = (((c_im * kernel_h + h_k) * kernel_w + w_k) * height_col + h_col) * width_col + w_col;
+			
+		  T h_k_m = (h_im - h_col * stride_h);
+          T w_k_m = (w_im - w_col * stride_w);	
+		  T weight = get_gradient_weight(h_k_m, w_k_m, h_k, w_k, height, width)	;
+          val += weight* data_col[data_col_index];
+        }
+      }
+    }
+    data_im[index] = val;
+  }
+}
+
 template <typename T>
 __global__ void stride_col2im_gpu_kernel(
     const int n, const T *data_col, const T *data_strides, const int channels,
@@ -265,11 +321,13 @@ __global__ void stride_col2im_gpu_kernel(
     const int batch_size, const int height_col, const int width_col,
     T *grad_im) {
 	
+
   CUDA_1D_KERNEL_LOOP(index, n) {
     const int j = (index / width_col / height_col / batch_size) % kernel_w;
-    const int i = (index / width_col / height_col / batch_size / kernel_w) % kernel_h;
+    const int i = (index / width_col / height_col / batch_size) / kernel_w % kernel_h;
     const int c =  index / width_col / height_col / batch_size / kernel_w / kernel_h;
     // compute the start and end of the output
+	//printf("index %d ,i %d , c %d \n",index,n,c);  
 
     //const int deformable_group_index = c / channel_per_deformable_group;
 
@@ -298,6 +356,7 @@ __global__ void stride_col2im_gpu_kernel(
     const int cur_h = (int)cur_inv_h_data;
     const int cur_w = (int)cur_inv_w_data;
 	  
+	//T val =  0; 
     for (int dy = -2; dy <= 2; dy++) {
       for (int dx = -2; dx <= 2; dx++) {
 		  
@@ -310,10 +369,20 @@ __global__ void stride_col2im_gpu_kernel(
 			
 		  // something like mutex	
           atomicAdd(grad_im + cur_bottom_grad_pos, weight * cur_top_grad);
+		  //atomicAdd(grad_im + cur_bottom_grad_pos,  cur_top_grad);
+          //if (grad_im[cur_bottom_grad_pos] == 0.0){			
+		  //grad_im[cur_bottom_grad_pos]	= cur_top_grad;
+		  //}	  
+		  //val+=	weight * cur_top_grad;
+		  //val = weight * cur_top_grad;
         }
       }
+	//T weight = get_gradient_weight(cur_inv_h_data, cur_inv_w_data, cur_h + 0, cur_w + 0, height, width);	
+	//int cur_bottom_grad_pos = ((b * channels + c) * height + cur_h ) * width + cur_w ;	
+	//grad_im[cur_bottom_grad_pos] = cur_top_grad*0.005;	
     }
   }
+  
 }
 
 template <typename T> 
@@ -365,7 +434,7 @@ __global__ void stride_col2im_coord_gpu_kernel(
       float h_in = h_out * stride_h - pad_h; 
       
       
-      printf("i=%3d, j=%3d, c=%3d, b=%3d col_pos=%3d w_in=%3f h_in=%3f \n",i,j,c,b,col_pos, w_in, h_in);		
+      //printf("i=%3d, j=%3d, c=%3d, b=%3d col_pos=%3d w_in=%3f h_in=%3f \n",i,j,c,b,col_pos, w_in, h_in);		
 	  //const int data_offset_h_ptr = (((2 * (i * kernel_w + j)) * height_col + h_out) * width_col + w_out);
       //const int data_offset_w_ptr = (((2 * (i * kernel_w + j) + 1) * height_col + h_out) * width_col +  w_out);
       //const T offset_h = data_offset_ptr[data_offset_h_ptr];
