@@ -1,0 +1,16 @@
+model:
+  learn_strides: True
+  fix_strides_after_some_epochs: False
+  fix_on_epochs: 70  
+saving:
+  save_path: "logs/strides_no_aug_64"
+  name_of_logs: "strides_no_aug_64"
+train:
+  seed: 123
+  batch_size: 128
+  epochs: 400
+  data_augmentation: True
+  lr: 0.01
+  lr_strides: 0.01  
+  momentum: 0.9
+  weight_decay: 0.0005
