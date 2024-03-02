@@ -1,7 +1,8 @@
 # Learnable Strides in Spatial Domain
 
+This is a project for making learnable downsizing in neural networks. This is happend by learning the strides in convolutional layers.
 
-This code is based upon [mmcv](https://github.com/open-mmlab/mmcv/tree/master/mmcv/ops) implementation of Deformable Convolutional Networks and the following [repo] (https://github.com/chengdazhi/Deformable-Convolution-V2-PyTorch)
+The code is based upon [mmcv](https://github.com/open-mmlab/mmcv/tree/master/mmcv/ops) implementation of Deformable Convolutional Networks and the following [repo](https://github.com/chengdazhi/Deformable-Convolution-V2-PyTorch).
 
 ## Requirements and Current Setup
 The complete enviroment for building the code:
