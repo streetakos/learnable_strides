@@ -1,6 +1,6 @@
 # Learnable Strides in Spatial Domain
 
-This is a project for making learnable downsizing in neural networks. This is happenning by learning the stride parameter in the convolutional layers
+This project focuses on developing learnable downsampling techniques in neural networks. It achieves this by making the stride parameter in convolutional layers learnable. This allows the network to dynamically adjust its downsampling behavior during training, potentially leading to improved performance.
 
 The code is based upon [mmcv](https://github.com/open-mmlab/mmcv/tree/master/mmcv/ops) implementation of Deformable Convolutional Networks and the following [repo](https://github.com/chengdazhi/Deformable-Convolution-V2-PyTorch).
 
